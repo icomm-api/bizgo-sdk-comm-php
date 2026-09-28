@@ -1,0 +1,90 @@
+# bizgo-sdk-comm (PHP)
+
+> PHP SDK for the Bizgo Communication API (Korea): SMS/LMS/MMS, international SMS, RCS, Kakao AlimTalk/BrandMessage, Naver TalkTalk. Install `composer require icomm-api/bizgo-sdk-comm:^1.2` (current version 1.2.0), namespace `Bizgo\`. PHP >= 8.2 (ext-curl, ext-mbstring).
+
+## Rules for generated code
+
+- Read the API key from the environment: `new BizgoClient()` uses `BIZGO_API_KEY`. Never hard-code keys, never put them in client-side code. The key is sent raw (no `Bearer`/`ApiKey` prefix); the SDK does this.
+- Use `environment: Environment::Sandbox` for tests (no real delivery). Default is Production.
+- Use named arguments everywhere; parameter names are the API field names (`senderKey`, `templateCode`, `from`).
+- Every channel is sent with `$client->send->omni(to: ..., messages: [...])`. Put fallback channels after the primary one: `[new AlimtalkMessage(senderKey: ..., templateCode: ..., msgType: 'AT', text: ...), new SmsMessage(...)]`.
+- LMS and MMS both use `MmsMessage`; MMS when `fileKey: [...]` is set (upload with `$client->files->uploadMms()` first, max 3 keys, jpg <= 300KB).
+- SMS text <= 90 bytes, LMS/MMS <= 2000 bytes, counted in EUC-KR/CP949 (Hangul = 2 bytes). Emoji are rejected. Validation happens when the model is constructed and throws `Bizgo\Exception\ValidationException` (`$e->errors` = list of `['path' => ..., 'reason' => ...]`).
+- Conditionally required fields (spec `x-sdk-required-if`) are checked before sending, with the same `ValidationException`. Alimtalk full send (no `sendType`) needs `msgType: 'AT'` (text) or `'AI'` (image) and `text` (the server rejects a missing msgType with A523); reuse `$client->alimtalk->templates->get(...)->msgType`. Alimtalk/brand message `sendType: 'template'` needs `replaceWords` on every destination (checked when the whole `SendOmniRequest`/`ReservationCreateRequest` is built) and no msgType/text. Also: brand message button `WL` needs `urlPc`+`urlMobile`, `AL` needs `urlMobile`; RCS `header: '1'` needs `footer`; counsel messages need the attachment of their `msgType`.
+- Max 200 recipients per request. Split larger lists.
+- Set `idempotencyKey:` on sends that may be retried; without it, sends are not retried after timeouts/5xx (to avoid duplicates).
+- `idempotencyTtl` (0-86400 s) defaults to `Bizgo\Resource\Send::DEFAULT_IDEMPOTENCY_TTL` (86400) whenever `idempotencyKey` is set: Bizgo rejects a key without a TTL (A309), so the SDK fills it (sends, `send->request()`, bulk chunks, generated operations whose body has both fields). An explicit value, including 0, is kept; no key means no TTL is added. Your model/array is not changed.
+- A successful send only means *accepted*. Check `$result->failed()` for rejected recipients (a resend with the same `idempotencyKey` succeeds with per-recipient `A301`: those recipients are in `$result->duplicates()`, already accepted earlier, not in `failed()`/`succeeded()`), and get final delivery results from reports (`$client->reports->consume($handler)` or webhooks).
+- Substitution: text contains `#{name}`; values go in `new Destination(to: ..., replaceWords: ['name' => '...'])`.
+- Models are `final readonly`; `fromArray()` rejects unknown keys. Response models keep unknown fields in `->extra`.
+- Dates: pass `DateTimeImmutable` with `new DateTimeZone('Asia/Seoul')` (converted to KST) or strings in the documented format.
+- Every other API (146 spec operations in total) is a generated method `$client-><resource>-><method>(...)`: path params, then `body:` (model or array with API names), then query/header/form params, all named. It returns the `x-sdk-result` model (never null on success; empty model or `[]`), or `void`. Paginated operations also have `iter<Method>()` generators. Do not invent method names: check `Bizgo\Internal\Operations::ALL` (`name` = `resource.method`).
+- More than 200 recipients: `$client->send->bulk(to: $list, messages: [...], idempotencyKeyPrefix: 'campaign-id')`; check `$result->errors` (chunk index ranges) and `$result->failed()`; on a re-run, already-accepted recipients are in `$result->duplicates()` (not an error).
+- Client-side rate limits are on by default (send: 200 recipients/s, other: 5 requests/s) and per process only; pass `rateLimit: null` to disable, `new RateLimit(send: ..., other: ...)` to change.
+- Tests: use `Bizgo\Testing\FakeTransport` (`$fake->client()`, `$fake->on('<operationId>')->fail(...)`/`->data(...)`, `$fake->lastRequest()`, `FakeTransport::signWebhook()`), never a real key or network.
+- Counsel webhooks are not signed (signatures apply only to report and MO webhooks): `WebhookReceiver::parseCounselMessage($body)` etc. need no webhook secret (the instance methods `$receiver->counselMessage($headers, $body)` behave the same and ignore signature headers); answer `WebhookReceiver::counselAck()`. Report/MO always require a signature.
+
+## Quick reference
+
+```php
+use Bizgo\BizgoClient;
+use Bizgo\Environment;
+use Bizgo\Upload;
+use Bizgo\Model\{Destination, SmsMessage, MmsMessage, AlimtalkMessage, BrandMessage, RcsMessage, InternationalMessage, NaverTalkMessage, SendOmniRequest};
+
+$client = new BizgoClient(environment: Environment::Sandbox);   // apiKey:, baseUrl:, timeout:, connectTimeout:, maxRetries:, proxy:, caInfo:, caPath: (built-in cURL), httpClient: (Guzzle / Symfony Psr18Client; other PSR-18 clients need trustHttpClient: true), requestFactory:, streamFactory:, logger: (PSR-3), appInfo: new AppInfo('app', '1.0'), rateLimit: new RateLimit()|null, hooks: [Hook]
+
+$client->send->sms(to: '01000000000', from: '01000000000', text: '...');                  // -> Bizgo\Result\SendResult
+$client->send->lms(to: ..., from: ..., text: ..., title: null);
+$client->send->mms(to: ..., from: ..., text: ..., fileKeys: ['...'], title: null);
+$client->send->omni(to: [...], messages: [...], ref: null, groupKey: null, paymentCode: null, idempotencyKey: null, idempotencyTtl: null);
+$client->send->request(SendOmniRequest|array);                                            // raw body with API field names
+$result->msgKeys(); $result->succeeded(); $result->duplicates(); $result->failed(); $result->trackingId;
+
+$client->files->uploadMms('path.jpg' | SplFileInfo | resource | Upload::fromContents($bytes, 'a.jpg'));   // -> ->fileKey, ->expired
+$client->files->uploadRcs($file);                                                          // -> ->media
+$client->files->uploadBrandMessage($file, kind: 'default'|'wide'|'wideItemList'|'wideItemList/first'|'carouselFeed'|'carouselCommerce');  // -> ->imgUrl
+
+$client->reports->poll();  /* ReportBatch ->reportId ->reports ->isEmpty() */  $client->reports->ack($reportId);
+$client->reports->consume(fn (array $reports) => ..., maxBatches: null);                  // -> int, acks only if the handler returned
+$client->reports->inquiry($msgKey);                                                        // -> list<Report>
+
+$client->messages->status($msgKey); $client->messages->statusByRequestId($requestId);     // -> list<MessageStatus>
+$client->messages->statistics($startDate, $endDate, serviceType: null, groupKey: null);  // -> list<MessageStatistics>
+$client->messages->history($requestTime, serviceType: ['SMS'], groupKey: null, lastSeq: null, limit: null);  // -> MessagePage
+foreach ($client->messages->iterHistory($requestTime, serviceType: ['SMS', 'ALIMTALK']) as $m) {}            // Generator
+$client->messages->mo($msgKey); $client->messages->moHistory($occurredTime, from: null, to: null); $client->messages->iterMoHistory(...);
+
+use Bizgo\Webhook\WebhookReceiver;
+$receiver = new WebhookReceiver((string) getenv('BIZGO_WEBHOOK_SECRET'));
+// the webhook secret is obtained by requesting it from Bizgo; report/mo verify X-IB-Signature = HMAC-SHA256(secret, X-IB-Timestamp), hex or base64
+$report = $receiver->report($psr7RequestOrHeaderArray, $rawBody);   // throws WebhookVerificationException -> answer 401
+echo json_encode(WebhookReceiver::ack($report->msgKey));            // {"msgKey": ...} within 5 seconds; dedupe by msgKey
+WebhookReceiver::verifySignature($secret, $timestamp, $signature, tolerance: 300);
+$event = WebhookReceiver::parseCounselMessage($rawBody); echo json_encode(WebhookReceiver::counselAck()); // {"code":"A000","result":"Success"}
+
+// generated resources (examples)
+$client->reservations->create(ReservationCreateRequest::fromArray([...]))->resvKey;  $client->reservations->iterList(resvSendTime: '2026-12-01 10:00:00');
+$client->alimtalk->templates->get(senderKey: '...', templateCode: '...');  $client->alimtalk->templates->iterList(senderKey: '...');
+$client->kakao->senders->requestToken([...]);  $client->insights->alimtalk->get(startDate: $d1, endDate: $d2, senderKey: ['...']);
+$client->counsel->messages->sendPlain([...]);  $client->rcs->templates->list();  $client->brandMessage->groupSends->create([...]);
+
+$bulk = $client->send->bulk(to: $numbers, messages: [new SmsMessage(from: '...', text: '...')], chunkSize: 200, idempotencyKeyPrefix: 'camp');
+$bulk->msgKeys(); $bulk->duplicates(); $bulk->failed(); $bulk->errors; // list<BulkChunkError{chunkIndex,start,end,error}>
+```
+
+## Errors
+
+`Bizgo\Exception\BizgoException` (interface) > `ConfigurationException`, `ValidationException`, `ConnectionException` (> `TimeoutException`), `ApiException` (> `BadRequestException`, `AuthenticationException`, `PermissionDeniedException`, `NotFoundException`, `DuplicateRequestException`, `RateLimitException` with `->retryAfter`, `InternalServerException`), `InvalidResponseException`, `WebhookVerificationException`.
+Also `BulkSendException` (`->partial` keeps accepted chunks) and `WebhookPayloadException` (bad webhook body, answer 400; subclass of `WebhookVerificationException`).
+`DuplicateRequestException` is a request-level A301 (per-recipient A301 goes to `duplicates()` instead). `DuplicateRequestException->alreadyAccepted` is true when an automatic retry got A301 (the message went out once).
+`ApiException` has `->httpStatus`, `->errorCode` (not `code`), `->layer` ('gateway' = common.authCode, 'service' = data.code; same code differs by layer), `->description` (Korean), `->trackingId`, `->body` (may contain phone numbers; do not log).
+`AuthenticationException` usually means a wrong key or an unregistered caller IP.
+
+## Links
+
+- [README](https://github.com/icomm-api/bizgo-sdk-comm-php/blob/main/README.md)
+- [Examples](https://github.com/icomm-api/bizgo-sdk-comm-php/tree/main/examples)
+- [OpenAPI spec](https://github.com/icomm-api/bizgo-api-spec/blob/main/dist/openapi.yaml)
+- [Bizgo API reference](https://developers.bizgo.io/api-sdk/api-reference)
+- [Error codes](https://developers.bizgo.io/api-sdk/api-reference/error-codes)

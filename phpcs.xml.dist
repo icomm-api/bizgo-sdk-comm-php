@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<ruleset name="bizgo-sdk-comm-php">
+    <description>PSR-12 for the Bizgo PHP SDK.</description>
+    <file>src</file>
+    <file>tests</file>
+    <file>examples</file>
+    <file>bin</file>
+    <arg name="extensions" value="php"/>
+    <arg name="colors"/>
+    <arg name="cache" value=".phpcs-cache"/>
+    <arg value="sp"/>
+    <rule ref="PSR12"/>
+    <rule ref="Generic.Files.LineLength">
+        <properties>
+            <property name="lineLimit" value="140"/>
+            <property name="absoluteLineLimit" value="0"/>
+        </properties>
+        <!-- generated docblocks keep markdown tables from the spec on one line; tests hold long fixtures -->
+        <exclude-pattern>src/Model/*</exclude-pattern>
+        <exclude-pattern>tests/*</exclude-pattern>
+        <!-- the generator composes long lines of generated code; its output is checked -->
+        <exclude-pattern>bin/lib/*</exclude-pattern>
+    </rule>
+    <!-- the generator and the example scripts declare functions and run code in one file on purpose -->
+    <rule ref="PSR1.Files.SideEffects">
+        <exclude-pattern>bin/*</exclude-pattern>
+        <exclude-pattern>examples/*</exclude-pattern>
+        <exclude-pattern>tests/Support/router.php</exclude-pattern>
+    </rule>
+    <rule ref="PSR1.Classes.ClassDeclaration">
+        <exclude-pattern>bin/*</exclude-pattern>
+    </rule>
+</ruleset>

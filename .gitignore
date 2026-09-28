@@ -1,0 +1,24 @@
+# dependencies and tool caches
+/vendor/
+/.phpunit.cache/
+/.phpunit.result.cache
+/.phpstan.cache/
+/.phpcs-cache
+/build/
+/coverage/
+
+# secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets/
+auth.json
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

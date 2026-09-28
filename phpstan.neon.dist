@@ -1,0 +1,18 @@
+includes:
+    - vendor/phpstan/phpstan-strict-rules/rules.neon
+    - vendor/phpstan/phpstan-phpunit/extension.neon
+    - vendor/phpstan/phpstan-phpunit/rules.neon
+
+parameters:
+    level: max
+    phpVersion: 80200
+    paths:
+        - src
+        - tests
+        - examples
+        - bin
+    tmpDir: .phpstan.cache
+    treatPhpDocTypesAsCertain: false
+    # the generated resources are created by a trait method that only the constructor calls
+    additionalConstructors:
+        - Bizgo\BizgoClient::initGeneratedResources
