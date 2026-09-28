@@ -28,7 +28,7 @@
         "psr/log": "^2.0 || ^3.0"
     },
     "require-dev": {
-        "guzzlehttp/guzzle": "^7.9",
+        "guzzlehttp/guzzle": "^7.9 || ^8.0",
         "nyholm/psr7": "^1.8",
         "open-telemetry/api": "^1.4",
         "phpstan/phpstan": "^2.1",
